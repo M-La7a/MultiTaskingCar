@@ -1,0 +1,373 @@
+#include <Wire.h>
+#include <ESP32Servo.h>
+#include <FirebaseESP32.h>
+#include <esp_task_wdt.h>
+////////////////VARIABLE DEFINATION///////////////
+#define ENASpeed 0
+#define ENBSpeed 0
+int right_speed;
+int left_speed;
+String LineFollowMode="false";
+String SelfBalanceMode="false";
+FirebaseData firebasedata;
+FirebaseData SelfBalance, LineFollow;
+bool back1=false;
+const char* ssid = "La7a";
+const char* password = "0987654321";
+#define echoPin 32 // attach pin D5 esp32 to pin Echo of HC-SR04
+#define trigPin 33 //attach pin D18 esp32 to pin Trig of HC-SR04
+long duration; // variable for the duration of sound wave travel
+int distance; // variable for the distance measurement
+int ENA = 23;
+int ENB = 5;
+int rmotor2 = 14;
+int rmotor1 = 27;
+int lmotor1 = 4;
+int lmotor2 = 19;
+int mspeed ;
+int16_t Acc_rawX, Acc_rawY, Acc_rawZ,Gyr_rawX, Gyr_rawY, Gyr_rawZ;
+float Acceleration_angle[2];
+float Gyro_angle[2];
+float Total_angle[2];
+float elapsedTime, time1, timePrev;
+unsigned long duration_wifi = 0;
+int i;
+float rad_to_deg = 180/3.141592654;
+float PID, pwmLeft, pwmRight, error, previous_error;
+float pid_p=0;
+float pid_i=0;
+float pid_d=0;
+////////////////////////PID CONSTANST/////////////////////
+float kp=37;
+float ki=0.001;
+float kd=5;
+float desired_angle = -3.3;//////////////TARGET ANGLE/////////////
+// Black Line Follower 
+int IR1=36;      //Right sensor
+int IR2=39;    //left Sensor
+////////Avoid and LINE FOLLOW/////////////////// 
+void task2(void *parameters){
+  //if(LineFollowMode=="true"){
+     // Serial.println("a5ls");
+     
+  for(;;){
+    //Serial.println(SelfBalanceMode);
+    digitalWrite(trigPin, LOW);
+    vTaskDelay(2*portTICK_PERIOD_MS/1000);
+  //delayMicroseconds(2);
+  // Sets the trigPin HIGH (ACTIVE) for 10 microseconds
+  digitalWrite(trigPin, HIGH);
+  vTaskDelay(10*portTICK_PERIOD_MS/1000);
+  //delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+
+  // Reads the echoPin, retuzxccvc rns the sound wave travel time in microseconds
+  duration = pulseIn(echoPin, HIGH);
+  // Calculating the distance
+  distance = duration * 0.034 / 2; // Speed of sound wave divided by 2 (go and back)
+  // Displays the distance on the Serial Monitor
+  //Serial.print("Distance: ");
+  //Serial.println(distance);
+  //Serial.println(" cm");
+ 
+    back();
+   if(LineFollowMode=="true"){
+      if(digitalRead(IR1)==HIGH && digitalRead(IR2)==HIGH) //IR will not glow on black line
+  {//Serial.println("stop");
+    //Stop both Motors
+    digitalWrite(rmotor1,LOW);
+    digitalWrite(rmotor2,LOW);
+    digitalWrite(lmotor1,LOW);
+    digitalWrite(lmotor2,LOW);
+   analogWrite (ENA, 0);
+   analogWrite (ENB, 0);
+  }
+
+  else if(digitalRead(IR1)==LOW && digitalRead(IR2)==LOW)  //IR not on black line
+  {//Serial.println("F");
+    //Move both the Motors
+    digitalWrite(rmotor1,HIGH);
+    digitalWrite(rmotor2,LOW);
+    digitalWrite(lmotor1,HIGH);
+    digitalWrite(lmotor2,LOW);
+    analogWrite (ENA, 100);
+    analogWrite (ENB, 100);
+  }
+
+  else if(digitalRead(IR1)==LOW && digitalRead(IR2)==HIGH)
+  {//Serial.println("L");
+    //Tilt robot towards left by stopping the left wheel and moving the right one
+    digitalWrite(rmotor1,HIGH);     
+    digitalWrite(rmotor2,LOW);
+    digitalWrite(lmotor1,LOW);
+    digitalWrite(lmotor2,HIGH);
+    analogWrite (ENA, 200);
+    analogWrite (ENB, 150);
+   delay(100);
+  }
+
+  else if(digitalRead(IR1)==HIGH && digitalRead(IR2)==LOW)
+  {//Serial.println("R");
+    //Tilt robot towards right by stopping the right wheel and moving the left one
+     digitalWrite(rmotor1,LOW);     // If I want to turn right then the speed of the right wheel should be less than that of the left wheel, here, let a be the right wheel
+    digitalWrite(rmotor2,HIGH);
+    digitalWrite(lmotor1,HIGH);
+    digitalWrite(lmotor2,LOW);
+    analogWrite (ENA, 150);
+   analogWrite (ENB, 200);
+   delay(100);
+  }
+
+  else
+  {
+    //Stop both the motors
+    digitalWrite(rmotor1,LOW);
+    digitalWrite(rmotor2,LOW);
+    digitalWrite(lmotor1,LOW);
+    digitalWrite(lmotor2,LOW);
+    analogWrite (ENA, 0);
+   analogWrite (ENB, 0);
+  }
+}
+
+    esp_task_wdt_delete(NULL);
+    }
+  
+  }
+
+
+      ///////////PID TASK//////////////
+void task1(void *parameters){
+ // Serial.println(SelfBalanceMode);
+   // if(SelfBalanceMode=="true")
+   
+    for(;;){
+    while(SelfBalanceMode=="false"){vTaskDelay(10);}
+    analogWrite(ENA,right_speed);
+    analogWrite(ENB,left_speed);
+    timePrev = time1;  
+    time1 = millis();  
+    elapsedTime = (time1 - timePrev) / 1000; 
+    Wire.beginTransmission(0x68);
+    Wire.write(0x3B); 
+    Wire.endTransmission(false);
+    Wire.requestFrom(0x68,6,true);
+    ////////////////////PULLING RAW ACCELEROMETER DATA FROM IMU///////////////// 
+    Acc_rawX=Wire.read()<<8|Wire.read(); 
+    Acc_rawY=Wire.read()<<8|Wire.read();
+    Acc_rawZ=Wire.read()<<8|Wire.read(); 
+    /////////////////////CONVERTING RAW DATA TO ANGLES/////////////////////
+    Acceleration_angle[0] = atan((Acc_rawY/16384.0)/sqrt(pow((Acc_rawX/16384.0),2) + pow((Acc_rawZ/16384.0),2)))*rad_to_deg;
+    Acceleration_angle[1] = atan(-1*(Acc_rawX/16384.0)/sqrt(pow((Acc_rawY/16384.0),2) + pow((Acc_rawZ/16384.0),2)))*rad_to_deg;
+    Wire.beginTransmission(0x68);
+    Wire.write(0x43); 
+    Wire.endTransmission(false);
+    Wire.requestFrom(0x68,4,true); 
+    //////////////////PULLING RAW GYRO DATA FROM IMU/////////////////////////
+    Gyr_rawX=Wire.read()<<8|Wire.read(); 
+    Gyr_rawY=Wire.read()<<8|Wire.read(); 
+    ////////////////////CONVERTING RAW DATA TO ANGLES///////////////////////
+    Gyro_angle[0] = Gyr_rawX/131.0; 
+    Gyro_angle[1] = Gyr_rawY/131.0;
+    //////////////////////////////COMBINING BOTH ANGLES USING COMPLIMENTARY FILTER////////////////////////
+    Total_angle[0] = 0.98 *(Total_angle[0] + Gyro_angle[0]*elapsedTime) + 0.02*Acceleration_angle[0];
+    Total_angle[1] = 0.98 *(Total_angle[1] + Gyro_angle[1]*elapsedTime) + 0.02*Acceleration_angle[1];
+    ////TOTAL_ANGLE[0] IS THE PITCH ANGLE WHICH WE NEED////////////
+    error = Total_angle[0] - desired_angle; /////////////////ERROR CALCULATION////////////////////
+    ///////////////////////PROPORTIONAL ERROR//////////////
+    pid_p = kp*error;
+    ///////////////////////INTERGRAL ERROR/////////////////
+    pid_i = pid_i+(ki*error);  
+   if (pid_i > 400){pid_i = 400;}                                              //We limit the "I" to the maximum output
+  else if (pid_i < -400){pid_i = -400;}
+    ///////////////////////DIFFERENTIAL ERROR//////////////
+    pid_d = kd*((error - previous_error)/elapsedTime);
+    ///////////////////////TOTAL PID VALUE/////////////////
+    PID = pid_p + pid_d + pid_i;
+    ///////////////////////UPDATING THE ERROR VALUE////////
+   
+    previous_error = error;
+    //delay(60);                               //////////UNCOMMENT FOR DDEBUGGING//////////////
+    //Serial.println(Total_angle[0]);          //////////UNCOMMENT FOR DDEBUGGING//////////////
+    //Serial.println(PID);                    //////////UNCOMMENT FOR DDEBUGGING//////////////
+    //Serial.println(mspeed);                  //////////UNCOMMENT FOR DDEBUGGING//////////////
+    /////////////////CONVERTING PID VALUES TO ABSOLUTE VALUES//////////////////////////////////
+   
+    mspeed = abs(PID);
+    
+    right_speed=map(mspeed,0,700,0,200);
+    left_speed=map(mspeed,0,700,0,200);
+    back();
+    if (PID < 20 && PID >-20 ){PID = 0;}     //Dead-band where the robot is more or less balanced
+    
+    //Serial.println(speed);
+    //Serial.println(mspeed);                  //////////UNCOMMENT FOR DDEBUGGING//////////////
+    ///////////////SELF EXPLANATORY///////////////
+   
+    if(Total_angle[0]<-3.3)
+      { if(back1==true){
+       left_speed=0;}
+      anti();
+      }
+    if(Total_angle[0]>-3.3){
+       if(back1==true){
+       left_speed=0;}
+       clockw();
+      }
+    if(Total_angle[0]>43.2)
+    {
+    halt();
+    }
+    if(Total_angle[0]<-47.8)
+    {
+    halt();
+   }
+    esp_task_wdt_delete(NULL);}
+    }
+  void task3(void *parameters){
+    for(;;){
+    get_mode();
+    get_mode2();
+    esp_task_wdt_delete(NULL);
+    }
+    }
+  
+  
+void setup() 
+{ Wire.begin();
+  delay(10);
+/////////////TO BEGIN I2C COMMUNICATIONS///////////////
+  Wire.beginTransmission(0x68);
+  Wire.write(0x6B);
+  Wire.write(0);
+  Wire.endTransmission(true);
+  ////////////////////////////////////
+  Serial.begin(9600);
+  WiFi.begin(ssid, password);
+    while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+   Serial.print("*");
+  }
+  duration_wifi=millis();
+  Firebase.begin("https://carproject-e5c5d-default-rtdb.firebaseio.com/", "r0p61DC7W1MWyhDukaekakMfiHfhUnMk9ExYGtWv");
+
+  ////////////////PIN MODE DEFINATIONS//////////////////////
+  pinMode(ENA, OUTPUT);
+  pinMode(ENB, OUTPUT);
+  pinMode(rmotor1,OUTPUT);
+  pinMode(lmotor1,OUTPUT);
+  pinMode(rmotor2,OUTPUT);
+  pinMode(lmotor2,OUTPUT);
+  pinMode(IR1,INPUT);
+  pinMode(IR2,INPUT);
+  
+  
+  pinMode(trigPin, OUTPUT); // Sets the trigPin as an OUTPUT
+  pinMode(echoPin, INPUT); // Sets the echoPin as an INPUT
+  xTaskCreate(
+    task1,
+    "task1",
+    10000,
+    NULL,
+    2,
+    NULL
+    );
+      xTaskCreate(
+      task2,
+      "task2",
+      10000,
+      NULL,
+      1,
+      NULL
+      );
+      xTaskCreate(
+      task3,
+      "task3",
+      40000,
+      NULL,
+      0,
+      NULL
+      );
+
+  
+}
+void loop() 
+{
+  /*////////////////////////WARNING//////////////////////
+   * DO NOT USE ANY DELAYS INSIDE THE LOOP OTHERWISE THE BOT WON'T BE 
+   * ABLE TO CORRECT THE BALANCE FAST ENOUGH
+   * ALSO, DONT USE ANY SERIAL PRINTS. BASICALLY DONT SLOW DOWN THE LOOP SPEED.
+  */
+  // get_mode();
+    vTaskDelete(NULL);
+    
+  
+}
+//////////////MOVEMENT FUNCTION///////////////////
+void clockw()
+{
+   digitalWrite(rmotor2, LOW);
+    digitalWrite(rmotor1, HIGH);
+      digitalWrite(lmotor2, LOW);
+    digitalWrite(lmotor1, HIGH);
+   
+}
+void anti()
+{
+  
+     digitalWrite(rmotor1, LOW);
+    digitalWrite(rmotor2, HIGH);
+      digitalWrite(lmotor1, LOW);
+    digitalWrite(lmotor2, HIGH);
+   
+}
+void halt()
+{
+  
+ digitalWrite(rmotor1, LOW);
+    digitalWrite(rmotor2, LOW);
+      digitalWrite(lmotor1, LOW);
+    digitalWrite(lmotor2, LOW);
+   
+  
+}
+void back(){
+  if(distance<=10&&distance!=0){
+ back1=true;
+ 
+ }else if(distance>10){
+  back1=false;
+  }
+  
+  }
+  void get_mode() {
+  if ( Firebase.getString(firebasedata, "/ESP/SelfBalance") ) {
+    SelfBalanceMode = firebasedata.stringData();
+    vTaskDelay(10);
+    //Serial.println(SelfBalanceMode);
+   /* if (SelfBalanceMode == "true") {
+      //Serial.println(" ==> mode1");
+      //SelfBalanceMode = "true";
+        Serial.println(SelfBalanceMode);
+
+    }
+    else{
+      //Serial.println(" ==> mode2");
+      SelfBalanceMode = "false";
+      }
+     delay(500);
+      }*/}}
+      void get_mode2(){
+        if ( Firebase.getString(firebasedata, "/ESP/LineFollow") ) {
+    LineFollowMode = firebasedata.stringData();
+    vTaskDelay(10);
+ /*   if (LineFollow == "true") {
+      //Serial.println(" ==> mode2");
+      LineFollowMode = "true";
+    }
+    else {
+     LineFollowMode = "false";
+      }
+      delay(500);*/
+      }
+      }
